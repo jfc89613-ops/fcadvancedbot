@@ -9,13 +9,22 @@
 - **Señales ML** con XGBoost + Optuna
 - **Gestión de riesgo** tradicional optimizada
 - **WebSocket real-time** para datos de mercado
+- **🆕 Sistema Multitimeframe** con análisis 1m/3m/5m y confirmaciones
 
 ### 🛡️ Gestión de Riesgo Avanzada
-- **SL/TP inteligente** con 3 niveles de take profit
+- **SL/TP inteligente** con 3 niveles de take profit BASADO EN PORCENTAJES
 - **Break-even** con cálculo de comisiones
 - **Trailing stop dinámico** con factores ATR adaptativos
 - **Sistema de cooldown** de 5 minutos anti-overtrading
 - **Margen configurable** (0.5 USD con fallback a 1.0 USD)
+- **🆕 MIN_NOTIONAL** compliance con buffer del 1%
+
+### 🎯 Sistema Multitimeframe (NUEVO)
+- **Análisis simultáneo** de 1m, 3m y 5m
+- **Confirmaciones múltiples** (mínimo 2 timeframes coincidentes)  
+- **Decisiones ML** por timeframe independiente
+- **Validación cruzada** antes de ejecutar trades
+- **Configuración flexible** de probabilidades por timeframe
 
 ### 📊 Características Técnicas
 - **Python 3.11+** con dependencias modernas
@@ -46,16 +55,49 @@ SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,ADAUSDT,XRPUSDT,...
 ```
 
 ### 3. Ejecutar
+
+#### Bot Tradicional (1 timeframe)
 ```bash
 python -m pro_bot.app.main_multi
+```
+
+#### 🆕 Bot Multitimeframe (RECOMENDADO)
+```powershell
+# Windows PowerShell
+.\scripts\run_multitimeframe.ps1
+
+# O directamente
+python pro_bot\app\main_multitimeframe.py
+```
+
+#### 🔬 Probar Sistema Multitimeframe
+```powershell
+# Test de 2 minutos
+.\scripts\test_multitimeframe.ps1
 ```
 
 ## 📈 Sistema de Trading
 
 ### 🎯 Estrategia
+
+#### Estrategia Tradicional (1 timeframe)
 - **Entrada**: Señales ML con umbral de probabilidad configurable
 - **SL**: 2.5x ATR por defecto
-- **TP**: 3 niveles (50% @ 1R, 25% @ 2R, 25% @ 3R)
+- **TP**: 3 niveles basados en % del valor de la posición
+
+#### 🆕 Estrategia Multitimeframe
+- **Análisis**: 1m, 3m, 5m simultáneamente
+- **Confirmación**: Mínimo 2 timeframes coincidentes
+- **Entrada**: Solo cuando hay confirmación múltiple
+- **Probabilidades**: Configuradas por timeframe:
+  - **1m**: long≥0.57, short≤0.43
+  - **3m**: long≥0.55, short≤0.45  
+  - **5m**: long≥0.53, short≤0.47
+
+#### Take Profit (Ambas estrategias)
+- **TP1**: 50% del valor de posición (cierra 50% qty)
+- **TP2**: 30% del valor de posición (cierra 25% qty)
+- **TP3**: 20% del valor de posición (cierra 25% qty)
 - **Break-even**: A 0.75R considerando comisiones
 - **Trailing**: Activación dinámica con factores ATR
 
@@ -64,9 +106,9 @@ python -m pro_bot.app.main_multi
 - **Detección universal** de cierres (SL/TP/manual/liquidación)
 - **Prevención de overtrading** automática
 
-### 📊 Gestión de Margen
-- **Margen primario**: 0.5 USD por posición
-- **Fallback automático**: 1.0 USD si falla
+### 📊 Gestión de Posición
+- **Qty calculada**: MIN_NOTIONAL / ENTRY_PRICE (con buffer 1%)
+- **Leverage automático**: Configurado por símbolo
 - **Límite máximo**: 5 posiciones simultáneas
 
 ## 🎛️ Configuración
@@ -75,8 +117,9 @@ python -m pro_bot.app.main_multi
 ```yaml
 risk:
   stop_loss_atr_mult: 2.5
-  take_profit_levels: [1.0, 2.0, 3.0]
-  tp_allocation: [0.5, 0.25, 0.25]
+  # TP basado en % del valor de la posición en PnL USDT
+  tp_pnl_percentages: [50.0, 30.0, 20.0]  # TP1: 50%, TP2: 30%, TP3: 20%
+  tp_allocation: [0.5, 0.25, 0.25]        # Cantidad a cerrar: 50%, 25%, 25%
   break_even_r: 0.75
   commission_rate: 0.0008
   cooldown_minutes: 5

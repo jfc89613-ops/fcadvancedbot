@@ -7,6 +7,13 @@ datasource:
   timeframe: "1m"
   tz: "UTC"
 
+# CONFIGURACIÓN MULTITIMEFRAME
+multitimeframe:
+  enabled: true
+  timeframes: ["1m", "3m", "5m"]  # Timeframes a analizar
+  min_confirmations: 2            # Mínimo de TF que deben coincidir para señal válida
+  primary_timeframe: "1m"         # TF principal para timing de entrada
+
 features:
   ofi_window: 120
   rsi_len: 14
@@ -44,8 +51,9 @@ serving:
 
 risk:
   stop_loss_atr_mult: 2.5
-  take_profit_levels: [1.0, 2.0, 3.0]
-  tp_allocation: [0.5, 0.25, 0.25]
+  # NUEVA CONFIGURACIÓN: TP basado en % del valor de la posición
+  tp_pnl_percentages: [50.0, 30.0, 20.0]  # % del valor de la posición para activar TP
+  tp_allocation: [0.5, 0.25, 0.25]        # % de cantidad a cerrar en cada TP
   break_even_r: 0.75
   commission_rate: 0.0008  # 0.08% total (entrada + salida)
   cooldown_minutes: 5      # Cooldown de 5 minutos tras abrir/cerrar posición

@@ -11,11 +11,8 @@ def start_kline_multiplex(symbols, interval, callback):
     Subscribe to kline close events for many symbols via unicorn websocket manager.
     callback receives each message with 'data' that contains 's' (symbol), 'k' (kline).
     """
-    # Determinar la URL del exchange basado en testnet
-    if settings.testnet:
-        exchange = "binance.com-futures-testnet"
-    else:
-        exchange = "binance.com-futures"
+    # Exchange para mainnet
+    exchange = "binance.com-futures"
     
     # Crear el WebSocket manager
     ubwa = BinanceWebSocketApiManager(

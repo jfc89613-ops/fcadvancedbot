@@ -21,8 +21,7 @@ def ensure_ws_started():
 
     twm = ThreadedWebsocketManager(
         api_key=settings.api_key,
-        api_secret=settings.api_secret,
-        testnet=settings.testnet
+        api_secret=settings.api_secret
     )
     twm.start()
     log.info("WS manager started")

@@ -3,13 +3,12 @@ from binance.client import Client
 from ..config import settings
 log = logging.getLogger("client")
 FUTURES_MAIN_URL = "https://fapi.binance.com/fapi"
-FUTURES_TESTNET_URL = "https://testnet.binancefuture.com/fapi"
 
 class FuturesClient:
     def __init__(self):
-        self.client = Client(settings.api_key, settings.api_secret, testnet=settings.testnet)
+        self.client = Client(settings.api_key, settings.api_secret)
         # Forzar URL de Futuros correcta
-        self.client.FUTURES_URL = FUTURES_TESTNET_URL if settings.testnet else FUTURES_MAIN_URL
+        self.client.FUTURES_URL = FUTURES_MAIN_URL
 
         # Sincronía de tiempo
         self.sync_time()
@@ -47,6 +46,20 @@ class FuturesClient:
             dual = "true" if settings.position_mode.upper() == "HEDGE" else "false"
             self.client.futures_change_position_mode(dualSidePosition=dual)
         except Exception as e: log.info(f"position_mode: {e}")
+    
+    def configure_margin_for_symbol(self, symbol: str):
+        """Configura el tipo de margen para un símbolo específico"""
+        try:
+            self.client.futures_change_margin_type(symbol=symbol, marginType=settings.margin_type)
+            log.info(f"[{symbol}] ✅ Margen configurado: {settings.margin_type}")
+        except Exception as e:
+            log.warning(f"[{symbol}] ⚠️ Error configurando margen: {e}")
+    
+    def standardize_margin_for_all_symbols(self, symbols: list):
+        """Estandariza el tipo de margen para todos los símbolos de la lista"""
+        log.info(f"🔧 Estandarizando margen {settings.margin_type} para {len(symbols)} símbolos...")
+        for symbol in symbols:
+            self.configure_margin_for_symbol(symbol)
     def exchange_info(self): return self.client.futures_exchange_info()
     def account(self): return self.client.futures_account()
     def ticker_price(self, symbol: str): return self.client.futures_symbol_ticker(symbol=symbol)

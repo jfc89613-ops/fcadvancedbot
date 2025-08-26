@@ -27,7 +27,12 @@ CFG_PATH = os.getenv("ML_CFG", "configs/ml.yaml")
 with open(CFG_PATH, 'r') as f:
     cfg = yaml.safe_load(f)
 
-log.info(f"Modo: {'TESTNET' if settings.testnet else 'MAINNET'}")
+def standardize_margin_for_symbols(symbols):
+    """Estandariza el tipo de margen para todos los símbolos"""
+    client = get_client()
+    client.standardize_margin_for_all_symbols(symbols)
+
+log.info("🚀 BOT iniciando en MAINNET")
 
 serv = cfg.get('serving', {})
 lm = LiveModel(

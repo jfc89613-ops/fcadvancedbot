@@ -20,7 +20,7 @@ CFG_PATH = os.getenv("ML_CFG", "configs/ml.yaml")
 with open(CFG_PATH, 'r') as f:
     cfg = yaml.safe_load(f)
 
-log.info(f"Modo: {'TESTNET' if settings.testnet else 'MAINNET'}")
+log.info("🚀 BOT iniciando en MAINNET")
 
 # Buffers simples
 message_count = 0

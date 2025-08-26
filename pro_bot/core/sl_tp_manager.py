@@ -38,13 +38,15 @@ class SLTPManager:
         self.last_open_time: Optional[datetime] = None   # Última vez que se abrió una posición
 
         self.stop_loss_atr_mult = float(self.risk.get("stop_loss_atr_mult", 2.5))
-        self.take_profit_levels = list(self.risk.get("take_profit_levels", [1.0, 2.0, 3.0]))
-        self.tp_allocation = list(self.risk.get("tp_allocation", [0.5, 0.25, 0.25]))
+        
+        # NUEVA CONFIGURACIÓN: TP basado en porcentaje del valor de la posición en PnL USDT
+        self.tp_pnl_percentages = list(self.risk.get("tp_pnl_percentages", [50.0, 30.0, 20.0]))  # % del valor de posición
+        self.tp_allocation = list(self.risk.get("tp_allocation", [0.5, 0.25, 0.25]))  # % de qty a cerrar
         
         # Asegurar exactamente 3 TP levels y allocations
-        if len(self.take_profit_levels) != 3:
-            log.warning(f"[{self.symbol}] ⚠️ Expected 3 TP levels, got {len(self.take_profit_levels)}. Using defaults.")
-            self.take_profit_levels = [1.0, 2.0, 3.0]
+        if len(self.tp_pnl_percentages) != 3:
+            log.warning(f"[{self.symbol}] ⚠️ Expected 3 TP PnL%, got {len(self.tp_pnl_percentages)}. Using defaults.")
+            self.tp_pnl_percentages = [50.0, 30.0, 20.0]  # 50%, 30%, 20% del valor de posición
             
         if len(self.tp_allocation) != 3:
             log.warning(f"[{self.symbol}] ⚠️ Expected 3 TP allocations, got {len(self.tp_allocation)}. Using defaults.")
@@ -62,7 +64,10 @@ class SLTPManager:
                 log.warning(f"[{self.symbol}] ⚠️ TP{i+1} allocation = {alloc}, setting to minimum 0.01")
                 self.tp_allocation[i] = 0.01
                 
-        log.info(f"[{self.symbol}] 🎯 TP Config: {list(zip(self.take_profit_levels, self.tp_allocation))}")
+        log.info(f"[{self.symbol}] 🎯 TP Config: {list(zip(self.tp_pnl_percentages, self.tp_allocation))}")
+        log.info(f"[{self.symbol}] 📊 TP1: {self.tp_pnl_percentages[0]}% posición = {self.tp_allocation[0]*100}% qty")
+        log.info(f"[{self.symbol}] 📊 TP2: {self.tp_pnl_percentages[1]}% posición = {self.tp_allocation[1]*100}% qty") 
+        log.info(f"[{self.symbol}] 📊 TP3: {self.tp_pnl_percentages[2]}% posición = {self.tp_allocation[2]*100}% qty")
         
         # Configuración optimizada de trailing stop
         self.trailing_activate_after_r = float(self.risk.get("trailing", {}).get("activate_after_r", 1.0))  # Activar más temprano
@@ -75,7 +80,7 @@ class SLTPManager:
         self.commission_rate = float(self.risk.get("commission_rate", 0.0008))  # 0.08% total por defecto (conservador)
 
     def _round_qty(self, q: float) -> float:
-        return self.filters.round_qty(q)
+        return float(self.filters.round_qty_down(q))
     
     def is_in_cooldown(self) -> bool:
         """Verifica si el símbolo está en cooldown después de abrir/cerrar posición"""
@@ -120,8 +125,13 @@ class SLTPManager:
         """Validar que la configuración TP sea segura"""
         log.info(f"[{self.symbol}] 🔍 Validating TP setup...")
         
-        # Verificar que TP1 y TP2 usen close_position=False
-        for i, (level, alloc) in enumerate(zip(self.take_profit_levels[:2], self.tp_allocation[:2]), 1):
+        # Verificar que los porcentajes de PnL sean decrecientes
+        for i in range(len(self.tp_pnl_percentages) - 1):
+            if self.tp_pnl_percentages[i] <= self.tp_pnl_percentages[i + 1]:
+                log.warning(f"[{self.symbol}] ⚠️ TP{i+1} PnL% ({self.tp_pnl_percentages[i]}%) should be > TP{i+2} ({self.tp_pnl_percentages[i+1]}%)")
+        
+        # Verificar que TP1 y TP2 no tomen >90% de qty
+        for i, alloc in enumerate(self.tp_allocation[:2], 1):
             if alloc >= 0.9:  # Si TP1 o TP2 toman >90% 
                 log.warning(f"[{self.symbol}] ⚠️ TP{i} allocation = {alloc*100:.1f}% (risky for partial close)")
         
@@ -130,7 +140,8 @@ class SLTPManager:
         if partial_sum >= 0.95:
             log.warning(f"[{self.symbol}] ⚠️ TP1+TP2 = {partial_sum*100:.1f}% (may close full position)")
         
-        log.info(f"[{self.symbol}] ✅ TP Strategy: TP1+TP2={partial_sum*100:.1f}% PARTIAL, TP3={self.tp_allocation[2]*100:.1f}% REMAINING")
+        log.info(f"[{self.symbol}] ✅ TP Strategy: {self.tp_pnl_percentages[0]}%/{self.tp_pnl_percentages[1]}%/{self.tp_pnl_percentages[2]}% PnL triggers")
+        log.info(f"[{self.symbol}] ✅ TP Allocation: TP1+TP2={partial_sum*100:.1f}% PARTIAL, TP3={self.tp_allocation[2]*100:.1f}% REMAINING")
 
     def open_trade(self, direction: str, atr: float, use_limit: bool = True, limit_offset_bps: int = 3):
         if self.state.active:
@@ -146,7 +157,7 @@ class SLTPManager:
         # Validar configuración TP antes de abrir
         self._validate_tp_setup()
 
-        basic = enter_basic(self.symbol, direction, use_limit=use_limit, limit_offset_bps=limit_offset_bps)
+        basic = enter_basic(self.symbol, direction)
         if basic is None:
             return
 
@@ -157,7 +168,7 @@ class SLTPManager:
         if direction == "LONG":
             sl_price = entry_price - self.stop_loss_atr_mult * atr
             r_value = entry_price - sl_price
-        else:
+        elif direction == "SHORT":
             sl_price = entry_price + self.stop_loss_atr_mult * atr
             r_value = sl_price - entry_price
 
@@ -167,7 +178,10 @@ class SLTPManager:
         tp_ids = []
         tp_created_count = 0
         
-        for i, (mult, alloc) in enumerate(zip(self.take_profit_levels, self.tp_allocation), 1):
+        # Calcular valor total de la posición en USDT
+        position_value_usdt = qty * entry_price
+        
+        for i, (pnl_percentage, alloc) in enumerate(zip(self.tp_pnl_percentages, self.tp_allocation), 1):
             # Validar allocation positiva
             if alloc <= 0:
                 log.warning(f"[{self.symbol}] ⚠️ TP{i} skipped: allocation = {alloc}")
@@ -186,12 +200,16 @@ class SLTPManager:
                     tp_ids.append(None)
                     continue
 
-            # Calcular precio TP
+            # NUEVA LÓGICA: Calcular precio TP basado en % del valor de la posición
+            target_pnl_usdt = position_value_usdt * (pnl_percentage / 100.0)  # PnL objetivo en USDT
+            
             if direction == "LONG":
-                tp_price = entry_price + mult * r_value
+                # Para LONG: tp_price = entry_price + (target_pnl_usdt / qty)
+                tp_price = entry_price + (target_pnl_usdt / qty)
                 side_close = "SELL"
-            else:
-                tp_price = entry_price - mult * r_value
+            elif direction == "SHORT":
+                # Para SHORT: tp_price = entry_price - (target_pnl_usdt / qty)
+                tp_price = entry_price - (target_pnl_usdt / qty)
                 side_close = "BUY"
 
             try:
@@ -210,7 +228,8 @@ class SLTPManager:
                 tp_created_count += 1
                 
                 close_status = "PARTIAL" if not close_position else "FULL"
-                log.info(f"[{self.symbol}] ✅ TP{i} @ {mult}R: qty={tp_qty} price={tp_price:.4f} mode={close_status} id={order_id}")
+                target_pnl_usdt = position_value_usdt * (pnl_percentage / 100.0)
+                log.info(f"[{self.symbol}] ✅ TP{i} @ {pnl_percentage}% pos (${target_pnl_usdt:.2f}): qty={tp_qty} price={tp_price:.4f} mode={close_status} id={order_id}")
             except Exception as e:
                 log.error(f"[{self.symbol}] ❌ TP{i} failed: {e}")
                 tp_ids.append(None)
@@ -228,7 +247,7 @@ class SLTPManager:
         # Activar cooldown tras apertura
         self._set_cooldown_open()
         
-        log.info(f"[{self.symbol}] 🚀 Abrir {direction}: entry={entry_price:.4f} qty={qty}, SL@{sl_price:.4f}, R={r_value:.4f}")
+        log.info(f"[{self.symbol}] 🚀 Abrir {direction}: entry={entry_price:.4f} qty={qty}, SL@{sl_price:.4f}, PosValue=${position_value_usdt:.2f}")
 
     def manage(self, last_close: float, atr: float):
         # Verificar si la posición se cerró para activar cooldown
@@ -239,8 +258,11 @@ class SLTPManager:
             return
 
         s = self.state
-        direction = "LONG" if s.side == "BUY" else "SHORT"
-        
+        if s.side == "BUY":
+            direction = "LONG"
+        elif s.side == "SELL":
+            direction = "SHORT"
+
         # Calcular R no realizado actual
         if direction == "LONG":
             r_unreal = (last_close - s.entry_price) / (s.r_value + 1e-12)

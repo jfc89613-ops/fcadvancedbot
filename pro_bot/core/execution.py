@@ -10,6 +10,101 @@ log = logging.getLogger("exec")
 
 SIDE = {"BUY":"BUY","SELL":"SELL"}
 
+# --- Nueva función: obtener todas las posiciones abiertas usando la API de Binance ---
+from dataclasses import dataclass
+
+@dataclass
+class PositionInfo:
+    symbol: str
+    positionAmt: float
+    entryPrice: float
+    markPrice: float
+    unrealizedProfit: float
+    leverage: int
+    liquidationPrice: float
+    side: str
+
+def cancel_pending_limit_orders():
+    """Cancela todas las órdenes LIMIT pendientes (de entrada)"""
+    client = get_client().client
+    try:
+        # Obtener todas las órdenes abiertas
+        open_orders = client.futures_get_open_orders()
+        cancelled = []
+        
+        for order in open_orders:
+            if order.get("type") == "LIMIT":
+                symbol = order.get("symbol")
+                order_id = order.get("orderId")
+                try:
+                    client.futures_cancel_order(symbol=symbol, orderId=order_id)
+                    cancelled.append(symbol)
+                    log.info(f"✅ Cancelled LIMIT order for {symbol} (ID: {order_id})")
+                except Exception as e:
+                    log.error(f"❌ Failed to cancel LIMIT order for {symbol}: {e}")
+        
+        if cancelled:
+            log.info(f"🧹 Cancelled {len(cancelled)} LIMIT orders: {cancelled}")
+        else:
+            log.info("✅ No LIMIT orders to cancel")
+            
+    except Exception as e:
+        log.error(f"Error getting open orders: {e}")
+
+def set_all_symbols_to_crossed_margin():
+    """Configura todos los símbolos activos para usar margen cruzado"""
+    client = get_client()
+    
+    # Obtener símbolos con posiciones abiertas
+    active_symbols = get_all_open_positions()
+    
+    # Lista de símbolos comunes para configurar
+    common_symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'LTCUSDT', 'XRPUSDT', 
+                     'ONTUSDT', '1000PEPEUSDT', 'WIFUSDT', 'SUIUSDT', 'HYPEUSDT',
+                     'ENAUSDT', 'LINKUSDT', 'AVAXUSDT', 'PROMPTUSDT', 'FARTCOINUSDT',
+                     'BIOUSDT', 'BNBUSDT']
+    
+    all_symbols = list(set(active_symbols + common_symbols))
+    
+    log.info(f"🔧 Configurando {len(all_symbols)} símbolos para margen CROSSED...")
+    
+    success_count = 0
+    for symbol in all_symbols:
+        try:
+            client.client.futures_change_margin_type(symbol=symbol, marginType="CROSSED")
+            log.info(f"✅ {symbol}: Margen cambiado a CROSSED")
+            success_count += 1
+        except Exception as e:
+            # Es normal que algunos ya estén en CROSSED
+            if "No need to change margin type" in str(e) or "marginType is invalid" in str(e):
+                log.info(f"ℹ️ {symbol}: Ya está en CROSSED")
+                success_count += 1
+            else:
+                log.warning(f"⚠️ {symbol}: Error cambiando margen: {e}")
+    
+    log.info(f"🎯 Configuración completada: {success_count}/{len(all_symbols)} símbolos en CROSSED")
+
+def get_all_open_positions_info():
+    """Obtiene todas las posiciones abiertas y su información usando la API de Binance."""
+    client = get_client().client
+    positions = client.futures_position_information()
+    open_positions = []
+    for pos in positions:
+        amt = float(pos.get("positionAmt", "0"))
+        if amt != 0:
+            side = "LONG" if amt > 0 else "SHORT"
+            open_positions.append(PositionInfo(
+                symbol=pos.get("symbol"),
+                positionAmt=amt,
+                entryPrice=float(pos.get("entryPrice", "0")),
+                markPrice=float(pos.get("markPrice", "0")),
+                unrealizedProfit=float(pos.get("unRealizedProfit", "0")),
+                leverage=int(pos.get("leverage", "1")),
+                liquidationPrice=float(pos.get("liquidationPrice", "0")),
+                side=side
+            ))
+    return open_positions
+
 def last_price(symbol: str) -> float:
     p = get_client().ticker_price(symbol)
     return float(p["price"])
@@ -133,21 +228,18 @@ def get_pending_limit_orders():
         return []
 
 def get_active_trading_symbols():
-    """Obtener símbolos con posiciones abiertas O órdenes limit pendientes"""
+    """Obtener símbolos con posiciones abiertas (ya no incluye órdenes LIMIT)"""
     open_positions = get_all_open_positions()
-    pending_orders = get_pending_limit_orders()
-    
-    # Combinar ambas listas sin duplicados
-    active_symbols = list(set(open_positions + pending_orders))
-    return sorted(active_symbols)
+    # Ya no incluimos pending_orders ya que usamos solo MARKET orders
+    return sorted(open_positions)
 
 def open_positions_count() -> int:
     """Retorna el número de posiciones abiertas consultando API directamente"""
     return len(get_all_open_positions())
 
 def active_trading_count() -> int:
-    """Retorna el número total de posiciones abiertas + órdenes limit pendientes"""
-    return len(get_active_trading_symbols())
+    """Retorna el número total de posiciones abiertas (ya no incluye órdenes LIMIT)"""
+    return len(get_all_open_positions())
 
 def has_pending_limit_order(symbol: str) -> bool:
     """Verificar si hay una orden LIMIT pendiente para un símbolo"""
@@ -194,11 +286,11 @@ def enter_position(direction: str, use_limit: bool = True, limit_offset_bps: int
     """
     sym = symbol or settings.symbol
 
-        # --- Límite de posiciones activas (abiertas + pendientes) ---
+    # --- Límite de posiciones activas (solo abiertas) ---
     MAX_ACTIVE_POSITIONS = 5
-    current_active = active_trading_count()
+    current_active = len(get_all_open_positions_info())  # Solo posiciones abiertas
     if current_active >= MAX_ACTIVE_POSITIONS:
-        log.info(f"Límite de {MAX_ACTIVE_POSITIONS} posiciones activas alcanzado (open + pending LIMIT). No se abre {sym}. Activas: {current_active}")
+        log.info(f"Límite de {MAX_ACTIVE_POSITIONS} posiciones activas alcanzado. No se abre {sym}. Activas: {current_active}")
         return
 
     # --- Evitar modificar una posición existente ---
@@ -211,47 +303,38 @@ def enter_position(direction: str, use_limit: bool = True, limit_offset_bps: int
     px = Decimal(str(last_price(sym)))
     f = get_filters(sym)
 
-    # qty usando margen fijo de 0.5 USDT + leverage automático
-    qty, lev = decide_qty_for_margin(sym, float(px), 0.5)
+    # qty usando nuevo cálculo: MIN_NOTIONAL / ENTRY_PRICE
+    qty, lev = decide_qty_for_margin(sym, float(px))
     if qty <= 0:
-        raise ValueError(f"[{sym}] Qty inválida para el margen configurado (posible minNotional alto)")
+        raise ValueError(f"[{sym}] Qty inválida para MIN_NOTIONAL: {f.min_notional}")
 
     qty_str = f.fmt_qty(qty)
 
-    # precios límite
+    # precios y orden market
     if direction == "LONG":
         side_open = SIDE["BUY"]
-        # offsets
-        limit_px = f.round_price_down(float(px * (Decimal("1") - Decimal(limit_offset_bps)/Decimal("10000"))))
-        tp = px * (Decimal("1") + Decimal("0.003") * Decimal(str(tp_rr)))
-        sl = px * (Decimal("1") - Decimal("0.002") * Decimal(str(sl_rr)))
+        tp = px * (Decimal("1") + Decimal("0.03") * Decimal(str(tp_rr)))
+        sl = px * (Decimal("1") - Decimal("0.02") * Decimal(str(sl_rr)))
     elif direction == "SHORT":
         side_open = SIDE["SELL"]
-        limit_px = f.round_price_up(float(px * (Decimal("1") + Decimal(limit_offset_bps)/Decimal("10000"))))
-        tp = px * (Decimal("1") - Decimal("0.003") * Decimal(str(tp_rr)))
-        sl = px * (Decimal("1") + Decimal("0.002") * Decimal(str(sl_rr)))
+        tp = px * (Decimal("1") - Decimal("0.03") * Decimal(str(tp_rr)))
+        sl = px * (Decimal("1") + Decimal("0.02") * Decimal(str(sl_rr)))
     else:
         log.info(f"[{sym}] NEUTRAL; no se abre posición.")
         return
 
-    price_str = f.fmt_price(limit_px)
-
-    # enviar orden
-    if use_limit:
-        ord_resp = limit_order(side_open, sym, qty_str, price_str)
-    else:
-        ord_resp = market_order(side_open, sym, qty_str)
-
-    log.info(f"[{sym}] order placed: {ord_resp.get('orderId','?')}")
+    # enviar orden MARKET
+    ord_resp = market_order(side_open, sym, qty_str)
+    log.info(f"[{sym}] MARKET order placed: {ord_resp.get('orderId','?')}")
 
     # TP/SL
     place_tp_sl(sym, side_open, tp, sl)
 
 
 # Funciones adicionales para SLTPManager
-def enter_basic(symbol: str, direction: str, use_limit: bool = True, limit_offset_bps: int = 3):
-    """Función básica de entrada de posición para SLTPManager"""
-    return enter_position(direction, use_limit=use_limit, limit_offset_bps=limit_offset_bps, symbol=symbol)
+def enter_basic(symbol: str, direction: str):
+    """Función básica de entrada de posición para SLTPManager (solo MARKET)"""
+    return enter_position(direction, use_limit=False, symbol=symbol)
 
 def stop_market(symbol: str, side: str, stop_price: float, qty: Optional[str] = None, close_position: bool = False):
     """Crear orden stop market"""

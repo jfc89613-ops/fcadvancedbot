@@ -57,6 +57,9 @@ class SymbolFilters:
     def round_qty_down(self, qty: float) -> Decimal:
         return self._floor_step(Decimal(str(qty)), self.qty_step)
 
+    def round_qty_up(self, qty: float) -> Decimal:
+        return self._ceil_step(Decimal(str(qty)), self.qty_step)
+
     def ensure_min_qty(self, qty: Decimal) -> Decimal:
         if hasattr(self, "min_qty") and qty < self.min_qty:
             return self._ceil_step(self.min_qty, self.qty_step)

@@ -16,11 +16,8 @@ def start_kline_multiplex(symbols, interval, callback):
     # Preparar streams para klines
     streams = [f"{sym.lower()}@kline_{interval}" for sym in symbols]
     
-    # URL del WebSocket de Binance Futures
-    if settings.testnet:
-        base_url = "wss://stream.binancefuture.com"
-    else:
-        base_url = "wss://fstream.binance.com"
+    # URL del WebSocket de Binance Futures (mainnet)
+    base_url = "wss://fstream.binance.com"
     
     # Crear URL para múltiples streams
     streams_param = "/".join(streams)

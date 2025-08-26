@@ -30,3 +30,18 @@ def build_features(df: pd.DataFrame, cfg: dict)->pd.DataFrame:
     out["atr"]=atr.bfill().fillna(0)
     feats=["ret1","rv","ofi","qi","mp","mp_diff","rsi","atr"]
     out[feats]=out[feats].shift(1); out=out.dropna(); return out
+
+def create_features_from_klines(df: pd.DataFrame)->pd.DataFrame:
+    """
+    Crear features a partir de klines usando configuración por defecto
+    """
+    # Configuración por defecto para features
+    default_cfg = {
+        "features": {
+            "vol_ewm_span": 720,
+            "ofi_window": 120,
+            "rsi_len": 14,
+            "atr_len": 14
+        }
+    }
+    return build_features(df, default_cfg)
