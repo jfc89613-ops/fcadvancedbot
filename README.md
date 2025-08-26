@@ -81,10 +81,10 @@ risk:
   commission_rate: 0.0008
   cooldown_minutes: 5
   trailing:
-    activate_after_r: 1.0
-    atr_mult: 0.8
-    step_r: 0.25
-    min_move: 0.1
+    activate_after_r: 0.5
+    atr_mult: 0.5
+    step_r: 0.1
+    min_move: 0.05
 
 serving:
   prob_long: 0.57
