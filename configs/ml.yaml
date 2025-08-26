@@ -1,0 +1,56 @@
+datasource:
+  kind: binance
+  binance:
+    interval: "1m"
+    lookback_days: 30
+  symbol: "BTCUSDT"
+  timeframe: "1m"
+  tz: "UTC"
+
+features:
+  ofi_window: 120
+  rsi_len: 14
+  atr_len: 14
+  vol_ewm_span: 1440
+
+labeling:
+  horizon_min: 15
+  pt_mult: 1.5
+  sl_mult: 1.0
+  use_atr: true
+
+cv:
+  n_splits: 5
+  embargo_frac: 0.01
+
+optuna:
+  n_trials: 80
+  timeout: null
+  seed: 42
+
+model:
+  type: xgb
+  objective: binary:logistic
+  eval_metric: auc
+
+walkforward:
+  enable: false
+
+serving:
+  prob_long: 0.57
+  prob_short: 0.43
+  min_spread_bps: 0.5
+  max_risk_per_trade: 0.01
+
+risk:
+  stop_loss_atr_mult: 2.5
+  take_profit_levels: [1.0, 2.0, 3.0]
+  tp_allocation: [0.5, 0.25, 0.25]
+  break_even_r: 0.75
+  commission_rate: 0.0008  # 0.08% total (entrada + salida)
+  cooldown_minutes: 5      # Cooldown de 5 minutos tras abrir/cerrar posición
+  trailing:
+    activate_after_r: 1.0
+    atr_mult: 0.8
+    step_r: 0.25
+    min_move: 0.1

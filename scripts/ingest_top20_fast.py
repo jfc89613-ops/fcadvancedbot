@@ -1,0 +1,345 @@
+import os
+import math
+import time
+import traceback
+from typing import List, Optional
+import yaml
+import pandas as pd
+from binance.client import Client
+from pymongo import MongoClient, UpdateOne
+from multiprocessing.pool import ThreadPool
+
+UPSERT_CHUNK = int(os.getenv("UPSERT_CHUNK", "1500"))
+WORKERS = int(os.getenv("INGEST_WORKERS", "4"))
+
+def load_cfg():
+    cfg = yaml.safe_load(open('configs/ml.yaml', 'r'))
+    mongo = cfg['datasource']['mongo']
+    uri  = os.getenv("MONGO_URI", mongo['uri'])
+    db   = os.getenv("MONGO_DB",  mongo['db'])
+    coll = os.getenv("MONGO_COLL", mongo['collection'])
+    start= os.getenv("START", "2025-07-01")
+    end  = os.getenv("END", None)
+    if not (uri.startswith("mongodb://") or uri.startswith("mongodb+srv://")):
+        raise SystemExit("URI inválida. Debe iniciar con 'mongodb://' o 'mongodb+srv://'.")
+    return uri, db, coll, start, end
+
+def top_usdtm_symbols_by_quote_volume(n: int = 20) -> List[str]:
+    cli = Client()
+    info = cli.futures_exchange_info()
+    perps = {s['symbol'] for s in info['symbols']
+             if s.get('contractType') == 'PERPETUAL' and s.get('quoteAsset') == 'USDT' and s.get('status') == 'TRADING'}
+    try:
+        tickers = cli.futures_ticker()
+    except Exception:
+        tickers = cli.futures_ticker_24hr()
+    rows = []
+    for r in tickers:
+        sym = r.get('symbol')
+        if sym in perps:
+            try:
+                qv = float(r.get('quoteVolume', 0.0))
+            except Exception:
+                qv = 0.0
+            rows.append((sym, qv))
+    rows.sort(key=lambda x: x[1], reverse=True)
+    return [s for s, _ in rows[:20]]
+
+def fetch_klines(symbol: str, start_str: str, end_str: Optional[str] = None) -> pd.DataFrame:
+    cli = Client()
+    data = cli.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, start_str, end_str)
+    cols = ['open_time','open','high','low','close','volume','close_time','qav','num_trades','tbbav','tbqav','ignore']
+    df = pd.DataFrame(data, columns=cols)
+    if df.empty:
+        return df
+    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True).dt.tz_convert(None)
+    df = df[['open_time','open','high','low','close','volume']]
+    for c in ['open','high','low','close','volume']:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['symbol'] = symbol
+    df = df.dropna(subset=['open_time','open','high','low','close','volume']).sort_values('open_time')
+    df = df.drop_duplicates(subset=['symbol','open_time'], keep='last')
+    return df
+
+def upsert_chunked(df: pd.DataFrame, uri: str, dbname: str, collname: str, chunk: int):
+    mc = MongoClient(uri,
+        serverSelectionTimeoutMS=20000,
+        socketTimeoutMS=120000,
+        connectTimeoutMS=20000,
+        retryWrites=True,
+        wTimeoutMS=120000,
+    )
+    col = mc[dbname][collname]
+    n = len(df)
+    if n == 0:
+        print("No data to upsert.")
+        return
+    total_chunks = math.ceil(n / chunk)
+    for i in range(total_chunks):
+        a = i*chunk
+        b = min((i+1)*chunk, n)
+        part = df.iloc[a:b]
+        ops = [UpdateOne(
+                {"symbol": r["symbol"], "open_time": r["open_time"]},
+                {"$set": {
+                    "symbol": r["symbol"], "open_time": r["open_time"],
+                    "open": float(r["open"]), "high": float(r["high"]),
+                    "low": float(r["low"]), "close": float(r["close"]),
+                    "volume": float(r["volume"]),
+                }},
+                upsert=True
+            ) for _, r in part.iterrows()]
+        try:
+            res = col.bulk_write(ops, ordered=False)
+            print(f"[chunk {i+1}/{total_chunks}] upserted={res.upserted_count}, modified={res.modified_count}")
+        except Exception as e:
+            print(f"[chunk {i+1}/{total_chunks}] bulk_write error: {e}")
+            traceback.print_exc()
+            if chunk > 500:
+                new_chunk = max(500, chunk // 2)
+                print(f"Retry with smaller chunk={new_chunk}")
+                return upsert_chunked(df.iloc[a:], uri, dbname, collname, new_chunk)
+            else:
+                raise
+
+def process_symbol(args):
+    sym, uri, db, coll, start, end = args
+    print(f"\n[{sym}] fetching...")
+    df = fetch_klines(sym, start, end)
+    print(f"[{sym}] rows: {len(df)}")
+    if not df.empty:
+        t0 = time.time()
+        upsert_chunked(df, uri, db, coll, UPSERT_CHUNK)
+        print(f"[{sym}] done in {time.time()-t0:.1f}s")
+    else:
+        print(f"[{sym}] no data.")
+
+if __name__ == '__main__':
+    uri, db, coll, start, end = load_cfg()
+    syms = top_usdtm_symbols_by_quote_volume(20)
+    print("Top20:", syms, flush=True)
+
+    args = [(s, uri, db, coll, start, end) for s in syms]
+    pool = ThreadPool(WORKERS)
+    pool.map(process_symbol, args)
+    pool.close(); pool.join()
+    print("\nTIP: índice: db.klines_1m.createIndex({symbol:1, open_time:1}, {unique:true})")
+1~import os, math, time, traceback
+from typing import List, Optional
+import yaml
+import pandas as pd
+from binance.client import Client
+from pymongo import MongoClient, UpdateOne
+from multiprocessing.pool import ThreadPool
+
+UPSERT_CHUNK = int(os.getenv("UPSERT_CHUNK", "1500"))
+WORKERS = int(os.getenv("INGEST_WORKERS", "4"))
+
+def load_cfg():
+    cfg = yaml.safe_load(open('configs/ml.yaml', 'r'))
+    mongo = cfg['datasource']['mongo']
+    uri  = os.getenv("MONGO_URI", mongo['uri'])
+    db   = os.getenv("MONGO_DB",  mongo['db'])
+    coll = os.getenv("MONGO_COLL", mongo['collection'])
+    start= os.getenv("START", "2025-07-01")
+    end  = os.getenv("END", None)
+    if not (uri.startswith("mongodb://") or uri.startswith("mongodb+srv://")):
+        raise SystemExit("URI inválida. Debe iniciar con 'mongodb://' o 'mongodb+srv://'.")
+    return uri, db, coll, start, end
+
+def top_usdtm_symbols_by_quote_volume(n: int = 20) -> List[str]:
+    cli = Client()
+    info = cli.futures_exchange_info()
+    perps = {s['symbol'] for s in info['symbols']
+             if s.get('contractType') == 'PERPETUAL' and s.get('quoteAsset') == 'USDT' and s.get('status') == 'TRADING'}
+    try:
+        tickers = cli.futures_ticker()
+    except Exception:
+        tickers = cli.futures_ticker_24hr()
+    rows = []
+    for r in tickers:
+        sym = r.get('symbol')
+        if sym in perps:
+            try:
+                qv = float(r.get('quoteVolume', 0.0))
+            except Exception:
+                qv = 0.0
+            rows.append((sym, qv))
+    rows.sort(key=lambda x: x[1], reverse=True)
+    return [s for s, _ in rows[:20]]
+
+def fetch_klines(symbol: str, start_str: str, end_str: Optional[str] = None) -> pd.DataFrame:
+    cli = Client()
+    data = cli.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, start_str, end_str)
+    cols = ['open_time','open','high','low','close','volume','close_time','qav','num_trades','tbbav','tbqav','ignore']
+    df = pd.DataFrame(data, columns=cols)
+    if df.empty:
+        return df
+    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True).dt.tz_convert(None)
+    df = df[['open_time','open','high','low','close','volume']]
+    for c in ['open','high','low','close','volume']:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['symbol'] = symbol
+    df = df.dropna(subset=['open_time','open','high','low','close','volume']).sort_values('open_time')
+    df = df.drop_duplicates(subset=['symbol','open_time'], keep='last')
+    return df
+
+def upsert_chunked(df: pd.DataFrame, uri: str, dbname: str, collname: str, chunk: int):
+    mc = MongoClient(uri,
+        serverSelectionTimeoutMS=20000,
+        socketTimeoutMS=120000,
+        connectTimeoutMS=20000,
+        retryWrites=True,
+        wTimeoutMS=120000,
+    )
+    col = mc[dbname][collname]
+    n = len(df)
+    if n == 0:
+        print("No data to upsert.")
+        return
+    total_chunks = math.ceil(n / chunk)
+    for i in range(total_chunks):
+        a = i*chunk
+        b = min((i+1)*chunk, n)
+        part = df.iloc[a:b]
+        ops = [UpdateOne(
+                {"symbol": r["symbol"], "open_time": r["open_time"]},
+                {"$set": {
+                    "symbol": r["symbol"], "open_time": r["open_time"],
+                    "open": float(r["open"]), "high": float(r["high"]),
+                    "low": float(r["low"]), "close": float(r["close"]),
+                    "volume": float(r["volume"]),
+                }},
+                upsert=True
+            ) for _, r in part.iterrows()]
+        try:
+            res = col.bulk_write(ops, ordered=False)
+            print(f"[chunk {i+1}/{total_chunks}] upserted={res.upserted_count}, modified={res.modified_count}")
+        except Exception as e:
+            print(f"[chunk {i+1}/{total_chunks}] bulk_write error: {e}")
+            traceback.print_exc()
+            if chunk > 500:
+                new_chunk = max(500, chunk // 2)
+                print(f"Retry with smaller chunk={new_chunk}")
+                return upsert_chunked(df.iloc[a:], uri, dbname, collname, new_chunk)
+            else:
+                raise
+
+def process_symbol(args):
+    sym, uri, db, coll, start, end = args
+    print(f"\n[{sym}] fetching...")
+    df = fetch_klines(sym, start, end)
+    print(f"[{sym}] rows: {len(df)}")
+    if not df.empty:
+        t0 = time.time()
+        upsert_chunked(df, uri, db, coll, UPSERT_CHUNK)
+        print(f"[{sym}] done in {time.time()-t0:.1f}s")
+    else:
+        print(f"[{sym}] no data.")
+
+if __name__ == '__main__':
+    uri, db, coll, start, end = load_cfg()
+    syms = top_usdtm_symbols_by_quote_volume(20)
+    print("Top20:", syms, flush=True)
+
+    args = [(s, uri, db, coll, start, end) for s in syms]
+    pool = ThreadPool(WORKERS)
+    pool.map(process_symbol, args)
+    pool.close(); pool.join()
+    print("\nTIP: índice: db.klines_1m.createIndex({symbol:1, open_time:1}, {unique:true})")
+1~import os, math, time, traceback
+from typing import List, Optional
+import yaml
+import pandas as pd
+from binance.client import Client
+from pymongo import MongoClient, UpdateOne
+from multiprocessing.pool import ThreadPool
+
+UPSERT_CHUNK = int(os.getenv("UPSERT_CHUNK", "1500"))
+WORKERS = int(os.getenv("INGEST_WORKERS", "4"))
+
+def load_cfg():
+    cfg = yaml.safe_load(open('configs/ml.yaml', 'r'))
+    mongo = cfg['datasource']['mongo']
+    uri  = os.getenv("MONGO_URI", mongo['uri'])
+    db   = os.getenv("MONGO_DB",  mongo['db'])
+    coll = os.getenv("MONGO_COLL", mongo['collection'])
+    start= os.getenv("START", "2025-07-01")
+    end  = os.getenv("END", None)
+    if not (uri.startswith("mongodb://") or uri.startswith("mongodb+srv://")):
+        raise SystemExit("URI inválida. Debe iniciar con 'mongodb://' o 'mongodb+srv://'.")
+    return uri, db, coll, start, end
+
+def top_usdtm_symbols_by_quote_volume(n: int = 20) -> List[str]:
+    cli = Client()
+    info = cli.futures_exchange_info()
+    perps = {s['symbol'] for s in info['symbols']
+             if s.get('contractType') == 'PERPETUAL' and s.get('quoteAsset') == 'USDT' and s.get('status') == 'TRADING'}
+    try:
+        tickers = cli.futures_ticker()
+    except Exception:
+        tickers = cli.futures_ticker_24hr()
+    rows = []
+    for r in tickers:
+        sym = r.get('symbol')
+        if sym in perps:
+            try:
+                qv = float(r.get('quoteVolume', 0.0))
+            except Exception:
+                qv = 0.0
+            rows.append((sym, qv))
+    rows.sort(key=lambda x: x[1], reverse=True)
+    return [s for s, _ in rows[:20]]
+
+def fetch_klines(symbol: str, start_str: str, end_str: Optional[str] = None) -> pd.DataFrame:
+    cli = Client()
+    data = cli.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, start_str, end_str)
+    cols = ['open_time','open','high','low','close','volume','close_time','qav','num_trades','tbbav','tbqav','ignore']
+    df = pd.DataFrame(data, columns=cols)
+    if df.empty:
+        return df
+    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True).dt.tz_convert(None)
+    df = df[['open_time','open','high','low','close','volume']]
+    for c in ['open','high','low','close','volume']:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['symbol'] = symbol
+    df = df.dropna(subset=['open_time','open','high','low','close','volume']).sort_values('open_time')
+    df = df.drop_duplicates(subset=['symbol','open_time'], keep='last')
+    return df
+
+def upsert_chunked(df: pd.DataFrame, uri: str, dbname: str, collname: str, chunk: int):
+    mc = MongoClient(uri,
+        serverSelectionTimeoutMS=20000,
+        socketTimeoutMS=120000,
+        connectTimeoutMS=20000,
+        retryWrites=True,
+        wTimeoutMS=120000,
+    )
+    col = mc[dbname][collname]
+    n = len(df)
+    if n == 0:
+        print("No data to upsert.")
+        return
+    total_chunks = math.ceil(n / chunk)
+    for i in range(total_chunks):
+        a = i*chunk
+        b = min((i+1)*chunk, n)
+        part = df.iloc[a:b]
+        ops = [UpdateOne(
+                {"symbol": r["symbol"], "open_time": r["open_time"]},
+                {"$set": {
+                    "symbol": r["symbol"], "open_time": r["open_time"],
+                    "open": float(r["open"]), "high": float(r["high"]),
+                    "low": float(r["low"]), "close": float(r["close"]),
+                    "volume": float(r["volume"]),
+                }},
+                upsert=True
+            ) for _, r in part.iterrows()]
+        try:
+            res = col.bulk_write(ops, ordered=False)
+            print(f"[chunk {i+1}/{total_chunks}] upserted={res.upserted_count}, modified={res.modified_count}")
+        except Exception as e:
+            print(f"[chunk {i+1}/{total_chunks}] bulk_write error: {e}")
+            traceback.print_exc()
+            if chunk > 500:
+
