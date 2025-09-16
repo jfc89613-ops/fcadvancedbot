@@ -462,7 +462,7 @@ def enter_position(direction: str, use_limit: bool = True, limit_offset_bps: int
 
 
 # Funciones adicionales para SLTPManager
-def enter_basic(symbol: str, direction: str):
+def enter_basic(symbol: str, direction: str) -> dict:
     """Función básica de entrada de posición para SLTPManager (solo MARKET)"""
     return enter_position(direction, use_limit=False, symbol=symbol)
 
