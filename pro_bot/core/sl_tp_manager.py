@@ -159,7 +159,7 @@ class SLTPManager:
 
         basic = enter_basic(self.symbol, direction)
         if not basic or not basic.get("success"):
-            log.warning(f"[{self.symbol}] ❌ No se pudo abrir posición básica: {basic.get('error') if isinstance(basic, dict) else basic}")
+            log.warning(f"[{self.symbol}] ❌ No se pudo abrir posición básica: {basic.get('error', 'Unknown error')}")
             return
 
         entry_price = float(basic.get("entry_price", last_price(self.symbol)))
