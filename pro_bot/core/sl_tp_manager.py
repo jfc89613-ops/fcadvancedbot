@@ -158,12 +158,17 @@ class SLTPManager:
         self._validate_tp_setup()
 
         basic = enter_basic(self.symbol, direction)
-        if basic is None:
+        if not basic or not basic.get("success"):
+            log.warning(f"[{self.symbol}] ❌ No se pudo abrir posición básica: {basic.get('error', 'Unknown error')}")
             return
 
-        entry_price = basic["entry_price"]
-        qty = basic["qty"]
-        side_open = basic["side"]   # BUY for long, SELL for short
+        entry_price = float(basic.get("entry_price", last_price(self.symbol)))
+        qty = float(basic.get("filled_qty", basic.get("qty", 0.0)))
+        side_open = basic.get("side", "BUY" if direction == "LONG" else "SELL")   # BUY for long, SELL for short
+
+        if qty <= 0:
+            log.error(f"[{self.symbol}] ❌ Cantidad inválida devuelta por enter_basic: {qty}")
+            return
 
         if direction == "LONG":
             sl_price = entry_price - self.stop_loss_atr_mult * atr
