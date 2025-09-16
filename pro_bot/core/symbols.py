@@ -76,3 +76,30 @@ def forced_symbols_from_env():
         if x not in seen:
             out.append(x); seen.add(x)
     return out
+
+
+DEFAULT_TRADING_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "ADAUSDT", "DOGEUSDT", "LTCUSDT", "TRXUSDT", "LINKUSDT",
+    "AVAXUSDT", "MATICUSDT", "DOTUSDT", "OPUSDT", "ARBUSDT",
+    "SUIUSDT", "1000PEPEUSDT", "APTUSDT", "ATOMUSDT",
+]
+
+
+def get_trading_symbols(client=None, limit: int = 19) -> List[str]:
+    """Obtiene la lista de símbolos a operar respetando configuraciones y fallback."""
+    forced = forced_symbols_from_env()
+    if forced:
+        log.info(f"Usando {len(forced)} símbolos definidos en SYMBOLS")
+        return forced[:limit]
+
+    try:
+        top_symbols = top_usdtm_symbols_by_quote_volume(limit)
+        if top_symbols:
+            log.info(f"Seleccionados {len(top_symbols)} símbolos por volumen 24h")
+            return top_symbols
+    except Exception as exc:
+        log.warning(f"No se pudo obtener símbolos por volumen: {exc}")
+
+    log.warning("Usando lista de símbolos por defecto")
+    return DEFAULT_TRADING_SYMBOLS[:limit]

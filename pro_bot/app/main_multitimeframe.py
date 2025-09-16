@@ -79,7 +79,7 @@ class MultitimeframeTradingBot:
         
         # 2. Inicializar trading engine
         self.trading_engine = TradingEngine(self.client)
-        await self.trading_engine.initialize()
+        await self.trading_engine.initialize(symbols=self.symbols)
         log.info("✅ Trading engine initialized")
         
         # 3. Inicializar ML inference engine
