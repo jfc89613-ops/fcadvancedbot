@@ -344,7 +344,7 @@ def _can_open_new_position(symbol: str) -> bool:
 
 # --- entrada principal ---
 def enter_position(direction: str, use_limit: bool = True, limit_offset_bps: int = 3,
-                   tp_rr: float = 1.5, sl_rr: float = 1.0, symbol: Optional[str] = None) -> dict:
+                   tp_rr: float = 1.5, sl_rr: float = 1.0, symbol: Optional[str] = None) -> Dict[str, object]:
     """Abre una nueva posición y devuelve detalles de la orden."""
     sym = symbol or settings.symbol
     result: Dict[str, object] = {
